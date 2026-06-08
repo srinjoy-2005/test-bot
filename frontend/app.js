@@ -23,17 +23,156 @@ function generateId() {
     return `id_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-// ─── State ────────────────────────────────────────────────────────────────────
-let ws          = null;
-let isWaiting   = false;
-let currentUserId   = localStorage.getItem("wellness_userId") || generateId();
-let currentUserName = localStorage.getItem("wellness_userName") || "there";
-let currentSessionId = null;
-let sessions = JSON.parse(localStorage.getItem("wellness_sessions") || "[]");
-let orbAnimId   = null;
-let currentTheme = localStorage.getItem("wellness_theme") || "dark";
+// ─── Session Storage Helpers ──────────────────────────────────────────────────
+function getUserMap() {
+    return JSON.parse(localStorage.getItem("wellness_userMap") || "{}");
+}
 
-// Persist initial global ID
+function saveUserMap(map) {
+    localStorage.setItem("wellness_userMap", JSON.stringify(map));
+}
+
+// Same name always resolves to the same userId
+function getUserIdForName(name) {
+    const map = getUserMap();
+    if (map[name]) return map[name];
+    const newId = generateId();
+    map[name] = newId;
+    saveUserMap(map);
+    return newId;
+}
+
+function loadUserSessions(userId) {
+    // Try user-scoped key first
+    const scoped = localStorage.getItem(`wellness_sessions_${userId}`);
+    if (scoped) return JSON.parse(scoped);
+
+    // Migration: if old shared key exists, adopt those sessions for this user
+    const old = localStorage.getItem("wellness_sessions");
+    if (old) {
+        const parsed = JSON.parse(old);
+        if (parsed.length > 0) {
+            localStorage.setItem(`wellness_sessions_${userId}`, old);
+            localStorage.removeItem("wellness_sessions");
+            return parsed;
+        }
+    }
+    return [];
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let ws = null;
+let isWaiting = false;
+let currentUserName = localStorage.getItem("wellness_userName") || "there";
+// Resolve userId from the name map (same name → same userId → same sessions)
+let currentUserId = currentUserName !== "there"
+    ? getUserIdForName(currentUserName)
+    : (localStorage.getItem("wellness_userId") || generateId());
+let currentSessionId = null;
+let sessions = loadUserSessions(currentUserId);
+let orbAnimId = null;
+let currentTheme = localStorage.getItem("wellness_theme") || "dark";
+let isVoiceOutputEnabled = false;
+
+// ─── Web Speech API Setup ─────────────────────────────────────────────────────
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+if (SpeechRecognition) {
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+        document.getElementById("mic-btn")?.classList.add("recording");
+    };
+
+    recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+            .map(result => result[0].transcript)
+            .join('');
+        const input = document.getElementById("message-input");
+        if (input) {
+            input.value = transcript;
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 120) + "px";
+        }
+    };
+
+    recognition.onend = () => {
+        document.getElementById("mic-btn")?.classList.remove("recording");
+    };
+
+    recognition.onerror = (e) => {
+        console.error("Speech recognition error", e);
+        document.getElementById("mic-btn")?.classList.remove("recording");
+    };
+}
+
+let systemVoices = [];
+const voiceSelect = document.getElementById("voice-select");
+
+function populateVoices() {
+    if (!window.speechSynthesis) return;
+    systemVoices = window.speechSynthesis.getVoices();
+    if (!voiceSelect) return;
+    
+    voiceSelect.innerHTML = "";
+    
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Default Voice";
+    voiceSelect.appendChild(defaultOption);
+
+    systemVoices.forEach(voice => {
+        const option = document.createElement("option");
+        option.value = voice.name;
+        option.textContent = `${voice.name} (${voice.lang})`;
+        voiceSelect.appendChild(option);
+    });
+
+    const savedVoice = localStorage.getItem("wellness_voice");
+    if (savedVoice) {
+        voiceSelect.value = savedVoice;
+    }
+}
+
+if (window.speechSynthesis) {
+    populateVoices();
+    if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = populateVoices;
+    }
+}
+
+voiceSelect?.addEventListener("change", (e) => {
+    localStorage.setItem("wellness_voice", e.target.value);
+});
+
+function speakText(text, force = false) {
+    if (!force && (!isVoiceOutputEnabled || !window.speechSynthesis)) return;
+    if (!window.speechSynthesis) return;
+
+    window.speechSynthesis.cancel();
+
+    // Strip thought blocks
+    const contentToSpeak = text.replace(/<thought>[\s\S]*?<\/thought>/i, '');
+
+    // Clean text: remove markdown tags, URLs, etc.
+    const cleanText = contentToSpeak.replace(/[#*`_]/g, '');
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.pitch = 1.5;
+
+    const savedVoice = localStorage.getItem("wellness_voice");
+    if (savedVoice && systemVoices.length > 0) {
+        const selectedVoice = systemVoices.find(v => v.name === savedVoice);
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        }
+    }
+
+    window.speechSynthesis.speak(utterance);
+}
+
+// Persist
 localStorage.setItem("wellness_userId", currentUserId);
 document.getElementById("name-input").value = localStorage.getItem("wellness_userName") || "";
 
@@ -57,13 +196,14 @@ initTheme();
 
 // ─── Sessions ─────────────────────────────────────────────────────────────────
 function saveSessions() {
-    localStorage.setItem("wellness_sessions", JSON.stringify(sessions));
+    localStorage.setItem(`wellness_sessions_${currentUserId}`, JSON.stringify(sessions));
 }
 
 function createNewSession() {
     currentSessionId = generateId();
     sessions.unshift({
         id: currentSessionId,
+        userId: currentUserId,
         title: "New Chat",
         updatedAt: Date.now(),
         messages: []
@@ -76,12 +216,12 @@ function loadSession(id) {
     currentSessionId = id;
     const session = sessions.find(s => s.id === id);
     if (!session) return;
-    
+
     // Clear chat
     const messagesEl = document.getElementById("messages");
     messagesEl.innerHTML = "";
     document.querySelector(".empty-state")?.remove();
-    
+
     if (session.messages.length === 0) {
         messagesEl.innerHTML = `<div class="empty-state">Hi ${currentUserName}! Start whenever you're ready.</div>`;
     } else {
@@ -90,7 +230,7 @@ function loadSession(id) {
         });
         scrollToBottom();
     }
-    
+
     renderSessionList();
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
@@ -100,7 +240,7 @@ function loadSession(id) {
             sessionId: currentSessionId
         }));
     }
-    
+
     // Reset emotion view
     document.getElementById("emotion-display").innerHTML = `
         <div class="emotion-bar-row">
@@ -122,15 +262,15 @@ function loadSession(id) {
 function saveMessage(role, content, isCrisis = false) {
     const session = sessions.find(s => s.id === currentSessionId);
     if (!session) return;
-    
+
     const time = formatTime();
     session.messages.push({ role, content, isCrisis, time });
     session.updatedAt = Date.now();
-    
+
     if (session.title === "New Chat" && role === "user") {
         session.title = content.slice(0, 26) + (content.length > 26 ? "..." : "");
     }
-    
+
     sessions = [session, ...sessions.filter(s => s.id !== currentSessionId)];
     saveSessions();
     renderSessionList();
@@ -193,6 +333,7 @@ function handleServerMessage(data) {
         case "response":
             removeTypingIndicator();
             appendMessage("ai", data.message, data.isCrisis);
+            speakText(data.message);
             updateEmotion(data.emotion);
             if (data.isCrisis) document.getElementById("crisis-banner").classList.remove("hidden");
             setWaiting(false);
@@ -207,7 +348,7 @@ function handleServerMessage(data) {
 
 // ─── Live Dot & Cognitive Load ────────────────────────────────────────────────
 function setLiveDot(online) {
-    const dot  = document.getElementById("live-dot");
+    const dot = document.getElementById("live-dot");
     const text = document.getElementById("live-text");
     const load = document.getElementById("cognitive-load-status");
     if (!dot || !text || !load) return;
@@ -248,26 +389,26 @@ function updateEmotionChart(emotionProfile) {
     sorted.forEach((emotion) => {
         const item = document.createElement("div");
         item.className = "emotion-chart-item";
-        
+
         const icon = document.createElement("div");
         icon.className = "emotion-chart-icon";
         icon.textContent = getEmotionIcon(emotion.label);
-        
+
         const label = document.createElement("div");
         label.className = "emotion-chart-label";
         label.textContent = emotion.label.charAt(0).toUpperCase() + emotion.label.slice(1);
-        
+
         const bar = document.createElement("div");
         bar.className = "emotion-chart-bar";
         const fill = document.createElement("div");
         fill.className = "emotion-chart-fill";
         fill.style.width = Math.min(100, Math.max(0, emotion.percentage)) + "%";
         bar.appendChild(fill);
-        
+
         const pct = document.createElement("div");
         pct.className = "emotion-chart-pct";
         pct.textContent = emotion.percentage + "%";
-        
+
         item.appendChild(icon);
         item.appendChild(label);
         item.appendChild(bar);
@@ -278,53 +419,53 @@ function updateEmotionChart(emotionProfile) {
 
 function updateEmotion(emotionProfile) {
     if (!emotionProfile || !emotionProfile.emotions) return;
-    
+
     // Update emotion chart
     updateEmotionChart(emotionProfile);
-    
+
     const display = document.getElementById("emotion-display");
     if (!display) return;
-    
+
     display.innerHTML = "";
     const sorted = [...emotionProfile.emotions].sort((a, b) => b.percentage - a.percentage);
     let maxIntensity = 0;
-    
+
     sorted.forEach((e) => {
         const row = document.createElement("div");
         row.className = "emotion-bar-row";
-        
+
         const labelDiv = document.createElement("div");
         labelDiv.className = "emotion-bar-label";
         const icon = getEmotionIcon(e.label);
         labelDiv.textContent = `${icon} ${e.label.charAt(0).toUpperCase() + e.label.slice(1)}`;
-        
+
         const pctDiv = document.createElement("div");
         pctDiv.className = "emotion-bar-pct";
         pctDiv.textContent = `${e.percentage}%`;
-        
+
         const barContainer = document.createElement("div");
         barContainer.className = "emotion-bar-container";
         const barFill = document.createElement("div");
         barFill.className = "emotion-bar-fill";
         barFill.style.width = `${Math.min(100, Math.max(0, e.percentage))}%`;
-        
+
         barContainer.appendChild(barFill);
-        
+
         const topRow = document.createElement("div");
         topRow.className = "emotion-bar-top";
         topRow.appendChild(labelDiv);
         topRow.appendChild(pctDiv);
-        
+
         row.appendChild(topRow);
         row.appendChild(barContainer);
         display.appendChild(row);
-        
+
         if (e.percentage > maxIntensity) maxIntensity = e.percentage;
     });
 
     const load = document.getElementById("cognitive-load-status");
     if (!load) return;
-    
+
     if (maxIntensity > 75) {
         load.textContent = "ELEVATED LOAD";
         load.style.color = "var(--crisis-red, #ff4f6b)";
@@ -346,9 +487,9 @@ function updateEmotion(emotionProfile) {
     const DPR = window.devicePixelRatio || 1;
     // FIX 1b: read the CSS display size at runtime rather than hardcoding 130
     const SIZE = 110;
-    canvas.width  = SIZE * DPR;
+    canvas.width = SIZE * DPR;
     canvas.height = SIZE * DPR;
-    canvas.style.width  = SIZE + "px";
+    canvas.style.width = SIZE + "px";
     canvas.style.height = SIZE + "px";
 
     const ctx = canvas.getContext("2d");
@@ -394,10 +535,10 @@ function updateEmotion(emotionProfile) {
         grad.addColorStop(1.0, "#4c1d95");
         ctx.fillStyle = grad;
 
-        ctx.shadowColor   = "rgba(168,85,247,0.55)";
-        ctx.shadowBlur    = 22;
+        ctx.shadowColor = "rgba(168,85,247,0.55)";
+        ctx.shadowBlur = 22;
         ctx.fill();
-        ctx.shadowBlur    = 0;
+        ctx.shadowBlur = 0;
 
         ctx.beginPath();
         ctx.arc(cx - 12, cy - 12, 13, 0, Math.PI * 2);
@@ -425,7 +566,7 @@ function appendMessageDOM(role, content, isCrisis = false, time) {
 
     const messages = document.getElementById("messages");
     if (!messages) return;
-    
+
     const row = document.createElement("div");
     row.className = `message-row ${role === "user" ? "user-row" : "ai-row"}${isCrisis ? " crisis" : ""}`;
 
@@ -480,13 +621,25 @@ function appendMessageDOM(role, content, isCrisis = false, time) {
     textSpan.innerHTML = formattedHtml;
     bubble.appendChild(textSpan);
 
+    const msgFooter = document.createElement("div");
+    msgFooter.className = "msg-footer";
+
     const timEl = document.createElement("div");
     timEl.className = "msg-time";
     timEl.textContent = time;
 
+    const speakBtn = document.createElement("button");
+    speakBtn.className = "read-aloud-btn";
+    speakBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Read Aloud`;
+    speakBtn.title = "Read aloud";
+    speakBtn.onclick = () => speakText(displayContent, true);
+
+    msgFooter.appendChild(timEl);
+    msgFooter.appendChild(speakBtn);
+
     body.appendChild(senderName);
     body.appendChild(bubble);
-    body.appendChild(timEl);
+    body.appendChild(msgFooter);
     row.appendChild(avatarEl);
     row.appendChild(body);
     messages.appendChild(row);
@@ -540,7 +693,7 @@ function setWaiting(val) {
 function sendMessage() {
     const input = document.getElementById("message-input");
     if (!input) return;
-    const text  = input.value.trim();
+    const text = input.value.trim();
     if (!text || isWaiting || !ws || ws.readyState !== WebSocket.OPEN) return;
 
     appendMessage("user", text);
@@ -553,12 +706,19 @@ function sendMessage() {
 // ─── Setup Form ───────────────────────────────────────────────────────────────
 document.getElementById("start-btn")?.addEventListener("click", () => {
     const name = document.getElementById("name-input").value.trim() || "there";
+
+    // Resolve userId from name map — same name always gets the same identity
+    currentUserId = getUserIdForName(name);
+    localStorage.setItem("wellness_userId", currentUserId);
+    sessions = loadUserSessions(currentUserId);
+
     currentUserName = name;
     localStorage.setItem("wellness_userName", name);
 
     document.getElementById("setup-modal").style.display = "none";
     document.getElementById("app").classList.remove("hidden");
 
+    renderSessionList();
     if (sessions.length > 0) {
         loadSession(sessions[0].id);
     } else {
@@ -585,6 +745,39 @@ document.getElementById("name-input")?.addEventListener("keydown", (e) => {
 });
 
 document.getElementById("send-btn")?.addEventListener("click", sendMessage);
+
+// Voice and Mic handlers
+document.getElementById("voice-toggle")?.addEventListener("click", () => {
+    isVoiceOutputEnabled = !isVoiceOutputEnabled;
+    const btn = document.getElementById("voice-toggle");
+    const iconOn = btn.querySelector(".voice-icon");
+    const iconOff = btn.querySelector(".voice-icon-off");
+    if (isVoiceOutputEnabled) {
+        iconOn.classList.remove("hidden");
+        iconOff.classList.add("hidden");
+        btn.style.color = "var(--accent)";
+        btn.style.borderColor = "var(--accent)";
+    } else {
+        iconOn.classList.add("hidden");
+        iconOff.classList.remove("hidden");
+        btn.style.color = "";
+        btn.style.borderColor = "";
+        window.speechSynthesis?.cancel();
+    }
+});
+
+document.getElementById("mic-btn")?.addEventListener("click", () => {
+    if (!recognition) {
+        alert("Speech recognition is not supported in this browser.");
+        return;
+    }
+    const btn = document.getElementById("mic-btn");
+    if (btn.classList.contains("recording")) {
+        recognition.stop();
+    } else {
+        recognition.start();
+    }
+});
 
 // Theme toggle
 document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);

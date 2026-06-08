@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import cors from "cors";
 import path from "path";
 import { config } from "./config";
+import "./utils/mockSetup";
 import { chatHandler } from "./api/chat";
 import { sessionRouter } from "./api/session";
 

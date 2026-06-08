@@ -598,6 +598,30 @@ html.light-mode .emotion-chart-item:hover {
   overflow: hidden; /* clip icons to button bounds */
 }
 
+.voice-select {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  max-width: 150px;
+  transition: all 0.2s ease;
+}
+
+.voice-select:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.voice-select option {
+  background: var(--panel-bg);
+  color: var(--text-primary);
+}
+
 .theme-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
@@ -631,6 +655,19 @@ html.light-mode .emotion-chart-item:hover {
 
 html.light-mode .theme-icon-sun  { opacity: 0; transform: rotate(180deg); }
 html.light-mode .theme-icon-moon { opacity: 1; transform: rotate(0deg); }
+
+.voice-icon, .voice-icon-off {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.voice-icon-off.hidden, .voice-icon.hidden {
+  opacity: 0;
+  transform: scale(0.8);
+  pointer-events: none;
+}
 
 /* ─── Crisis Banner ───────────────────────────────────────────────────────── */
 .crisis-banner {
@@ -766,9 +803,35 @@ html.light-mode .theme-icon-moon { opacity: 1; transform: rotate(0deg); }
   color: rgba(255, 180, 180, 0.9);
 }
 
+.msg-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
+}
+
 .msg-time {
   font-size: 10px;
   color: var(--text-muted);
+}
+
+.read-aloud-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.6;
+  transition: opacity 0.2s, color 0.2s;
+  padding: 0;
+}
+
+.read-aloud-btn:hover {
+  opacity: 1;
+  color: var(--accent);
 }
 
 /* ─── Typing Indicator ────────────────────────────────────────────────────── */
@@ -857,7 +920,7 @@ html.light-mode .theme-icon-moon { opacity: 1; transform: rotate(0deg); }
 
 #message-input::placeholder { color: var(--text-muted); }
 
-.send-btn {
+.send-btn, .mic-btn {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm);
@@ -869,12 +932,35 @@ html.light-mode .theme-icon-moon { opacity: 1; transform: rotate(0deg); }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: opacity 0.15s, transform 0.1s;
+  transition: opacity 0.15s, transform 0.1s, background-color 0.3s;
 }
 
-.send-btn:hover   { opacity: 0.85; }
-.send-btn:active  { transform: scale(0.96); }
-.send-btn:disabled { opacity: 0.25; cursor: not-allowed; transform: none; }
+.send-btn:hover, .mic-btn:hover   { opacity: 0.85; }
+.send-btn:active, .mic-btn:active  { transform: scale(0.96); }
+.send-btn:disabled, .mic-btn:disabled { opacity: 0.25; cursor: not-allowed; transform: none; }
+
+.mic-btn {
+  background: var(--input-wrapper-bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.mic-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mic-btn.recording {
+  color: var(--crisis-red);
+  border-color: var(--crisis-red);
+  animation: pulseMic 1.5s infinite;
+}
+
+@keyframes pulseMic {
+  0% { box-shadow: 0 0 0 0 rgba(255, 79, 107, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(255, 79, 107, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 79, 107, 0); }
+}
 
 .input-hint {
   font-size: 10px;

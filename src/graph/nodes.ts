@@ -24,6 +24,8 @@ function getCAMA(userId: string): CAMAMemory {
 export async function intakeNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`\n📥 [Node: Intake] User ID: ${state.userId}, User Name: ${state.userName}`);
+    console.log(`   Message: "${state.currentMessage}"`);
     // Ensure Zep session exists
     await ensureSession(state.userId);
     return {
@@ -35,6 +37,7 @@ export async function intakeNode(
 export async function routerNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`🧭 [Node: Router] Analysing message for emotions and crisis flags...`);
     const history = state.messages.slice(-6).map((m: BaseMessage) => ({
         role: m._getType() === "human" ? "user" : "assistant",
         content: typeof m.content === "string" ? m.content : "",
@@ -48,6 +51,10 @@ export async function routerNode(
                 ? "HIGH"
                 : "MEDIUM";
 
+    console.log(`   Emotion Blend:`, routerOutput.emotion.emotions.map(e => `${e.label} (${e.percentage}%)`).join(", "));
+    console.log(`   Crisis Level: ${routerOutput.crisis_level}, Volatility: ${routerOutput.volatility_score}`);
+    console.log(`   Implicit Need: ${routerOutput.implicit_need}, Sarcasm: ${routerOutput.sarcasm_detected}`);
+
     return {
         routerOutput,
         emoguardSensitivity,
@@ -60,6 +67,7 @@ export async function crisisNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
     const level = state.routerOutput?.crisis_level ?? 5;
+    console.log(`🚨 [Node: Crisis] CRITICAL: Crisis Level ${level} detected. Triggering safety response.`);
     const response = CRISIS_RESPONSES[level] ?? CRISIS_RESPONSES[5];
     return { finalResponse: response };
 }
@@ -68,6 +76,7 @@ export async function crisisNode(
 export async function memoryFetchNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`💾 [Node: Memory Fetch] Retrieving context from hybrid memory layers...`);
     const cama = getCAMA(state.userId);
     await cama.load();
 
@@ -85,6 +94,10 @@ export async function memoryFetchNode(
         emotionTags.length > 0 ? oldMemory.search(emotionTags, state.currentMessage, 3) : Promise.resolve([]),
     ]);
 
+    console.log(`   Recalled CAMA: ${camaNodes.length} nodes`);
+    console.log(`   Recalled Zep/Local: ${zepFacts.length} facts, Summary length: ${zepContext.summary.length} chars`);
+    console.log(`   Recalled Old Memories: ${oldMemories.length} consolidated themes`);
+
     return {
         camaNodes,
         camaConsole: cama.getConsole(),
@@ -98,6 +111,7 @@ export async function memoryFetchNode(
 export async function generationNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`🤖 [Node: Generation] Generating response draft... (Mock Groq: ${config.useMockGroq})`);
     const systemPrompt = buildSystemPrompt({
         userName: state.userName,
         routerOutput: state.routerOutput!,
@@ -130,6 +144,7 @@ export async function generationNode(
     });
 
     const draft = completion.choices[0]?.message?.content ?? "";
+    console.log(`   Draft generated: "${draft.replace(/\n/g, " ").slice(0, 80)}..."`);
     return { responseDraft: draft };
 }
 
@@ -137,6 +152,7 @@ export async function generationNode(
 export async function emoguardNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`🛡️ [Node: EmoGuard] Checking draft against therapeutic safety guidelines...`);
     const history = state.messages.slice(-6).map((m: BaseMessage) => ({
         role: m._getType() === "human" ? "user" : "assistant",
         content: typeof m.content === "string" ? m.content : "",
@@ -148,6 +164,12 @@ export async function emoguardNode(
         history
     );
     
+    console.log(`   Risk Score: ${report.risk_score.toFixed(2)}, Should Refine: ${report.should_refine}`);
+    console.log(`   Flags: ${report.flags.join(", ") || "none"}`);
+    if (report.should_refine) {
+        console.log(`   Advice: ${report.intervention_advice}`);
+    }
+
     // FIX: Actually increment the refineCount so the loop eventually breaks!
     return { 
         emoguardReport: report,
@@ -158,6 +180,7 @@ export async function emoguardNode(
 export async function outputNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`📤 [Node: Output] Final response accepted. Relaying to WebSocket.`);
     return {
         finalResponse: state.responseDraft,
         messages: [...state.messages, new AIMessage(state.responseDraft)],
@@ -169,6 +192,7 @@ export async function outputNode(
 export async function memoryUpdateNode(
     state: WellnessStateType
 ): Promise<Partial<WellnessStateType>> {
+    console.log(`📝 [Node: Memory Update] Ingesting turn into CAMA & hybrid memories...`);
     const cama = getCAMA(state.userId);
     const maxEmotionPercent = state.routerOutput?.emotion.emotions.reduce((max, e) => Math.max(max, e.percentage), 0) ?? 50;
     const salience = Math.max(
@@ -176,6 +200,7 @@ export async function memoryUpdateNode(
         state.routerOutput?.volatility_score ?? 0.3
     );
 
+    console.log(`   Ingesting episodic node with salience: ${salience.toFixed(2)}`);
     // Store the episode in CAMA
     await cama.ingest(
         state.currentMessage,
@@ -206,19 +231,23 @@ export async function memoryUpdateNode(
         userId: state.userId,
     }).catch(() => { /* silent */ });
 
+    console.log(`🏁 [Node: Memory Update] Ingest complete. Turn execution finished.\n`);
     return {};
 }
 
 // ─── Conditional Edges ────────────────────────────────────────────────────────
 export function routeAfterRouter(state: WellnessStateType): string {
-    if (state.isCrisis) return "crisis";
-    return "memory_fetch";
+    const destination = state.isCrisis ? "crisis" : "memory_fetch";
+    console.log(`🔀 [Router Route] Routing to "${destination}" (isCrisis: ${state.isCrisis})`);
+    return destination;
 }
 
 export function routeAfterEmoguard(state: WellnessStateType): string {
-    // Max 2 refinement loops to avoid infinite loops
-    if (state.emoguardReport?.should_refine && (state.refineCount ?? 0) < 2) {
-        return "refine";
+    const shouldRefine = state.emoguardReport?.should_refine && (state.refineCount ?? 0) < 2;
+    const destination = shouldRefine ? "refine" : "output";
+    console.log(`🔀 [EmoGuard Route] Routing to "${destination}" (shouldRefine: ${shouldRefine}, refineCount: ${state.refineCount})`);
+    if (shouldRefine) {
+        console.log(`🔄 [EmoGuard Route] Retrying generation node with feedback...`);
     }
-    return "output";
+    return destination;
 }

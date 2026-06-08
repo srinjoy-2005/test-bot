@@ -15,32 +15,21 @@
 import { MongoClient, Collection } from "mongodb";
 import { config } from "../config";
 import { llmBalancer } from "../utils/llmBalancer";
-import type { MemoryNode } from "../types";
+import type { MemoryNode, ArchivedMemory } from "../types";
 
 const client = new MongoClient(config.mongodbUri);
-let oldMemoryCollection: Collection | null = null;
+let oldMemoryCollection: Collection<ArchivedMemory> | null = null;
 
-async function getCollection(): Promise<Collection> {
+async function getCollection(): Promise<Collection<ArchivedMemory>> {
     if (!oldMemoryCollection) {
         await client.connect();
-        oldMemoryCollection = client.db("wellness_db").collection("old_memory");
+        oldMemoryCollection = client.db("wellness_db").collection<ArchivedMemory>("old_memory");
         // Compound index for fast lookups by user + time
         await oldMemoryCollection.createIndex({ userId: 1, archivedAt: -1 });
         // Text index for semantic search
         await oldMemoryCollection.createIndex({ summary: "text", emotion_tags: "text" });
     }
     return oldMemoryCollection;
-}
-
-export interface ArchivedMemory {
-    userId: string;
-    originalContent: string;
-    summary: string;
-    emotion_tags: string[];
-    originalSalience: number;
-    archiveReason: string; // "threshold_exceeded" | "ring_evicted"
-    archivedAt: number;
-    expiresAt?: number; // Optional expiration (null = forever)
 }
 
 /**
@@ -133,7 +122,7 @@ export class OldMemoryStore {
             const allMemories = await col
                 .find({
                     userId: this.userId,
-                    expiresAt: { $in: [null, { $gte: Date.now() }] }, // Not expired
+                    expiresAt: { $in: [null, { $gte: Date.now() }] } as any, // Not expired
                 })
                 .toArray() as ArchivedMemory[];
 

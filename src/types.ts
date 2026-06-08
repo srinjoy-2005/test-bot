@@ -76,6 +76,6 @@ export interface ArchivedMemory {
     emotion_tags: string[];
     originalSalience: number;
     archiveReason: string;
-    archivedAt: Date;
-    expiresAt?: Date;
+    archivedAt: number;
+    expiresAt?: number | null;
 }
